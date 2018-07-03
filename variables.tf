@@ -79,7 +79,7 @@ variable "master" {
   default = {
     nodes     = "3"
     type      = "m4.xlarge"
-    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
     disk      = "100" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
@@ -88,9 +88,9 @@ variable "master" {
 variable "proxy" {
   type = "map"
   default = {
-    nodes     = "3"
+    nodes     = "1"
     type      = "m4.large"
-    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
     disk      = "100" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
@@ -100,9 +100,9 @@ variable "proxy" {
 variable "management" {
   type = "map"
   default = {
-    nodes     = "3"
+    nodes     = "1"
     type      = "m4.xlarge"
-    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
     disk      = "100" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
@@ -112,9 +112,9 @@ variable "management" {
 variable "worker" {
   type = "map"
   default = {
-    nodes     = "3"
+    nodes     = "1"
     type      = "m4.xlarge"
-    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
     disk      = "100" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
@@ -124,9 +124,9 @@ variable "worker" {
 variable "va" {
   type = "map"
   default = {
-    nodes     = "3"
+    nodes     = "0"
     type      = "m4.xlarge"
-    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
     disk      = "100" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized

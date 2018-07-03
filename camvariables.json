@@ -1,0 +1,110 @@
+[
+    {
+        "name": "aws_region",
+        "label": "AWS Region",
+        "description": "AWS region to deploy infrastructure resources",
+        "hidden": false,
+        "immutable": false,
+        "required": true,
+        "secured": false,
+        "type": "string",
+        "options": [
+          {
+              "value": "us-east-1",
+              "label": "East US",
+              "default": "true"
+          },
+          {
+              "value": "us-west-1",
+              "label": "West US"
+          },
+          {
+              "value": "us-east-2",
+              "label": "East US 2"
+          },
+          {
+              "value": "us-west-2",
+              "label": "West US 2"
+          }
+        ]
+    },
+    {
+        "name": "instance_name",
+        "label": "ICP instance name and prefix",
+        "description": "Prefix of names for AWS ICP cluster resources; The name prefix must be 1-52 alphanumeric characters and dash",
+        "default": "icp-ibm-west",
+        "hidden": false,
+        "immutable": false,
+        "required": true,
+        "secured": false,
+        "type": "string",
+        "regex": "^[A-Za-z0-9-]{1,52}$"
+    },
+    {
+        "name": "icppassword",
+        "label": "ICP Admin User Password",
+        "description": "Password of the newly created administrative user; The supplied password must be between 6-72 characters long and must satisfy at least 3 of password complexity requirements from the following: 1) Contains an uppercase character; 2) Contains a lowercase character; 3) Contains a numeric digit; 4) Contains a special character",
+        "hidden": false,
+        "immutable": false,
+        "required": true,
+        "secured": true,
+        "type": "string",
+        "regex": "^[!-~]{6,72}$"
+    },
+    {
+        "name": "access_key",
+        "label": "AWS access Key",
+        "description": "Your AWS account acccess key",
+        "default": "None",
+        "hidden": false,
+        "immutable": false,
+        "required": true,
+        "secured": false,
+        "type": "string"
+    },
+    {
+      "name": "secret_key",
+      "type": "string",
+      "description": "You AWS account secret key",
+      "default": "",
+      "hidden": false,
+      "label": "You AWS account secret key",
+      "secured": false,
+      "required": true,
+      "immutable": false
+    },
+    {
+      "name": "key_name",
+      "label": "SSh key to access AWS",
+      "description": "",
+      "default": "gchensshkey",
+      "hidden": false,
+      "immutable": false,
+      "required": true,
+      "secured": false,
+      "type": "string",
+      "regex": "^[!-~]{6,72}$"
+    },
+    {
+      "name": "icp_inception_image",
+      "label": "The docker image for ICP installer",
+      "description": "",
+      "default": "ibmcom/icp-inception:2.1.0.2-ee",
+      "hidden": false,
+      "immutable": false,
+      "required": true,
+      "secured": false,
+      "type": "string"
+    },
+    {
+      "name": "existing_iam_instance_profile_name",
+      "label": "Existing AWS AMI image name",
+      "description": "",
+      "default": "icp-ec2-instance-profile",
+      "hidden": false,
+      "immutable": false,
+      "required": true,
+      "secured": false,
+      "type": "string"
+    }
+]
