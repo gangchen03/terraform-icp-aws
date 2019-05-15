@@ -4,9 +4,13 @@ resource "random_id" "clusterid" {
 }
 
 locals  {
-  iam_ec2_instance_profile_id = "${var.existing_ec2_iam_instance_profile_name != "" ?
-        var.existing_ec2_iam_instance_profile_name :
-        element(concat(aws_iam_instance_profile.icp_ec2_instance_profile.*.id, list("")), 0)}"
+  iam_ec2_master_instance_profile_id = "${var.existing_ec2_iam_master_instance_profile_name != "" ?
+        var.existing_ec2_iam_master_instance_profile_name :
+        element(concat(aws_iam_instance_profile.icp_ec2_master_instance_profile.*.id, list("")), 0)}"
+  iam_ec2_node_instance_profile_id = "${var.existing_ec2_iam_node_instance_profile_name != "" ?
+        var.existing_ec2_iam_node_instance_profile_name :
+        element(concat(aws_iam_instance_profile.icp_ec2_node_instance_profile.*.id, list("")), 0)}"
+
   efs_audit_mountpoints = "${concat(aws_efs_mount_target.icp-audit.*.dns_name, list(""))}"
   efs_registry_mountpoints = "${concat(aws_efs_mount_target.icp-registry.*.dns_name, list(""))}"
   image_package_uri = "${substr(var.image_location, 0, min(2, length(var.image_location))) == "s3" ?
@@ -85,7 +89,7 @@ resource "aws_instance" "bastion" {
   subnet_id     = "${element(aws_subnet.icp_public_subnet.*.id, count.index)}"
   vpc_security_group_ids = [
     "${aws_security_group.default.id}",
-    "${aws_security_group.bastion-22.id}"
+    "${aws_security_group.bastion.id}"
   ]
 
   availability_zone = "${format("%s%s", element(list(var.aws_region), count.index), element(var.azs, count.index))}"
@@ -96,12 +100,19 @@ resource "aws_instance" "bastion" {
   }
 
   tags = "${merge(var.default_tags, map(
-    "Name",  "${format("${var.instance_name}-bastion%02d", count.index + 1) }"
+    "Name",  "${format("${var.instance_name}-${random_id.clusterid.hex}-bastion%02d", count.index + 1) }"
   ))}"
   user_data = <<EOF
 #cloud-config
+fqdn: ${format("${var.instance_name}-bastion%02d", count.index + 1)}.${random_id.clusterid.hex}.${var.private_domain}
 users:
-  - default
+- default
+- name: icpdeploy
+  groups: [ wheel ]
+  sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
+  shell: /bin/bash
+  ssh-authorized-keys:
+  - ${tls_private_key.installkey.public_key_openssh}
 manage_resolv_conf: true
 resolv_conf:
   nameservers: [ ${cidrhost(element(aws_subnet.icp_private_subnet.*.cidr_block, count.index), 2)}]
@@ -113,13 +124,14 @@ EOF
 
 resource "aws_instance" "icpmaster" {
   depends_on = [
-    "null_resource.icp_install_package",
-    "aws_s3_bucket_object.docker_install_package",
-    "aws_s3_bucket_object.hostfile",
+    "aws_route_table_association.a",
     "aws_s3_bucket_object.icp_cert_crt",
     "aws_s3_bucket_object.icp_cert_key",
     "aws_s3_bucket_object.icp_config_yaml",
-    "aws_s3_bucket_object.ssh_key",
+    "aws_s3_bucket_object.bootstrap",
+    "aws_s3_bucket_object.create_client_cert",
+    "aws_s3_bucket_object.functions",
+    "aws_s3_bucket_object.start_install"
   ]
 
   count         = "${var.master["nodes"]}"
@@ -146,7 +158,7 @@ resource "aws_instance" "icpmaster" {
     device_index = 0
   }
 
-  iam_instance_profile = "${local.iam_ec2_instance_profile_id}"
+  iam_instance_profile = "${local.iam_ec2_master_instance_profile_id}"
 
 
   tags = "${merge(
@@ -158,47 +170,26 @@ resource "aws_instance" "icpmaster" {
   user_data = <<EOF
 #cloud-config
 packages:
-  - unzip
-  - python
+- unzip
+- python
 rh_subscription:
   enable-repo: rhui-REGION-rhel-server-optional
 write_files:
-  - path: /tmp/bootstrap.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/bootstrap.sh"))}
-${count.index == 0 ? "
-  - path: /tmp/icp_scripts/functions.sh
-    permissions: '755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/functions.sh"))}
-  - path: /tmp/icp_scripts/start_install.sh
-    permissions: '755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/start_install.sh"))}
-  "
-  :
-  "" }
-${count.index == 0 && var.enable_autoscaling ? "
-  - path: /tmp/icp_scripts/create_client_cert.sh
-    permissions: '755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/create_client_cert.sh"))}
-  "
-  :
-  "" }
+- path: /tmp/bootstrap-node.sh
+  permissions: '0755'
+  encoding: b64
+  content: ${base64encode(file("${path.module}/scripts/bootstrap-node.sh"))}
 runcmd:
-  - /tmp/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx ${local.image_package_uri != "" ? "-i ${local.image_package_uri}" : "" } -s ${var.icp_inception_image}
-${count.index == 0 ? "
-  - /tmp/icp_scripts/start_install.sh -i ${var.icp_inception_image} -b ${aws_s3_bucket.icp_config_backup.id}
-  "
+- /tmp/bootstrap-node.sh -c ${aws_s3_bucket.icp_config_backup.id} -s "bootstrap.sh functions.sh ${count.index == 0 ? "start_install.sh" : ""} ${count.index == 0 && var.enable_autoscaling ? "create_client_cert.sh" : ""}"
+- /tmp/icp_scripts/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx 
+${var.bastion["nodes"] == 0 && count.index == 0 ? "
+- /tmp/icp_scripts/start_install.sh -i ${local.icp-version} -b ${aws_s3_bucket.icp_config_backup.id} ${local.image_package_uri != "" ? "-c ${local.image_package_uri}" : "" }"
   :
-  "" }
-${count.index == 0 && var.enable_autoscaling ? "
-  - /tmp/icp_scripts/create_client_cert.sh -i ${var.icp_inception_image} -b ${aws_s3_bucket.icp_config_backup.id}
-  "
+"" }
+${var.bastion["nodes"] == 0 && count.index == 0 && var.enable_autoscaling ? "
+- /tmp/icp_scripts/create_client_cert.sh -i ${var.icp_inception_image} -b ${aws_s3_bucket.icp_config_backup.id}"
   :
-  "" }
+"" }
 ${var.master["nodes"] > 1 ? "
 mounts:
   - ['${element(local.efs_registry_mountpoints, count.index)}:/', '/var/lib/registry', 'nfs4', 'nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2', '0', '0']
@@ -207,13 +198,14 @@ mounts:
 :
 "" }
 users:
-  - default
-  - name: icpdeploy
-    groups: [ wheel ]
-    sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
-    shell: /bin/bash
-    ssh-authorized-keys:
-      - ${tls_private_key.installkey.public_key_openssh}
+- default
+- name: icpdeploy
+  groups: [ wheel ]
+  sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
+  shell: /bin/bash
+  ssh-authorized-keys:
+  - ${tls_private_key.installkey.public_key_openssh}
+fqdn:  ${format("${var.instance_name}-master%02d", count.index + 1) }.${random_id.clusterid.hex}.${var.private_domain}
 manage_resolv_conf: true
 resolv_conf:
   nameservers: [ ${cidrhost(element(aws_subnet.icp_private_subnet.*.cidr_block, count.index), 2)}]
@@ -225,8 +217,8 @@ EOF
 
 resource "aws_instance" "icpproxy" {
   depends_on = [
-    "null_resource.icp_install_package",
-    "aws_s3_bucket_object.docker_install_package"
+    "aws_route_table_association.a",
+    "aws_s3_bucket_object.bootstrap",
   ]
 
   count         = "${var.proxy["nodes"]}"
@@ -253,7 +245,7 @@ resource "aws_instance" "icpproxy" {
     device_index = 0
   }
 
-  iam_instance_profile = "${local.iam_ec2_instance_profile_id}"
+  iam_instance_profile = "${local.iam_ec2_node_instance_profile_id}"
 
   tags = "${merge(
     var.default_tags,
@@ -265,25 +257,27 @@ resource "aws_instance" "icpproxy" {
   user_data = <<EOF
 #cloud-config
 packages:
-  - unzip
-  - python
+- unzip
+- python
 rh_subscription:
   enable-repo: rhui-REGION-rhel-server-optional
 write_files:
-  - path: /tmp/bootstrap.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/bootstrap.sh"))}
+- path: /tmp/bootstrap-node.sh
+  permissions: '0755'
+  encoding: b64
+  content: ${base64encode(file("${path.module}/scripts/bootstrap-node.sh"))}
 runcmd:
-  - /tmp/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx ${local.image_package_uri != "" ? "-i ${local.image_package_uri}" : "" } -s ${var.icp_inception_image}
+- /tmp/bootstrap-node.sh -c ${aws_s3_bucket.icp_config_backup.id} -s "bootstrap.sh"
+- /tmp/icp_scripts/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx 
 users:
-  - default
-  - name: icpdeploy
-    groups: [ wheel ]
-    sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
-    shell: /bin/bash
-    ssh-authorized-keys:
-      - ${tls_private_key.installkey.public_key_openssh}
+- default
+- name: icpdeploy
+  groups: [ wheel ]
+  sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
+  shell: /bin/bash
+  ssh-authorized-keys:
+  - ${tls_private_key.installkey.public_key_openssh}
+fqdn: ${format("${var.instance_name}-proxy%02d", count.index + 1)}.${random_id.clusterid.hex}.${var.private_domain}
 manage_resolv_conf: true
 resolv_conf:
   nameservers: [ ${cidrhost(element(aws_subnet.icp_private_subnet.*.cidr_block, count.index), 2)}]
@@ -295,8 +289,8 @@ EOF
 
 resource "aws_instance" "icpmanagement" {
   depends_on = [
-    "null_resource.icp_install_package",
-    "aws_s3_bucket_object.docker_install_package"
+    "aws_route_table_association.a",
+    "aws_s3_bucket_object.bootstrap",
   ]
 
   count         = "${var.management["nodes"]}"
@@ -322,7 +316,7 @@ resource "aws_instance" "icpmanagement" {
     volume_type       = "gp2"
   }
 
-  iam_instance_profile = "${local.iam_ec2_instance_profile_id}"
+  iam_instance_profile = "${local.iam_ec2_node_instance_profile_id}"
 
   tags = "${merge(
     var.default_tags,
@@ -333,25 +327,27 @@ resource "aws_instance" "icpmanagement" {
   user_data = <<EOF
 #cloud-config
 packages:
-  - unzip
-  - python
+- unzip
+- python
 rh_subscription:
   enable-repo: rhui-REGION-rhel-server-optional
 write_files:
-  - path: /tmp/bootstrap.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/bootstrap.sh"))}
+- path: /tmp/bootstrap-node.sh
+  permissions: '0755'
+  encoding: b64
+  content: ${base64encode(file("${path.module}/scripts/bootstrap-node.sh"))}
 runcmd:
-  - /tmp/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx ${local.image_package_uri != "" ? "-i ${local.image_package_uri}" : "" } -s ${var.icp_inception_image}
+- /tmp/bootstrap-node.sh -c ${aws_s3_bucket.icp_config_backup.id} -s "bootstrap.sh"
+- /tmp/icp_scripts/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx 
 users:
-  - default
-  - name: icpdeploy
-    groups: [ wheel ]
-    sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
-    shell: /bin/bash
-    ssh-authorized-keys:
-      - ${tls_private_key.installkey.public_key_openssh}
+- default
+- name: icpdeploy
+  groups: [ wheel ]
+  sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
+  shell: /bin/bash
+  ssh-authorized-keys:
+  - ${tls_private_key.installkey.public_key_openssh}
+fqdn: ${format("${var.instance_name}-management%02d", count.index + 1) }.${random_id.clusterid.hex}.${var.private_domain}
 manage_resolv_conf: true
 resolv_conf:
   nameservers: [ ${cidrhost(element(aws_subnet.icp_private_subnet.*.cidr_block, count.index), 2)}]
@@ -363,8 +359,8 @@ EOF
 
 resource "aws_instance" "icpva" {
   depends_on = [
-    "null_resource.icp_install_package",
-    "aws_s3_bucket_object.docker_install_package"
+    "aws_route_table_association.a",
+    "aws_s3_bucket_object.bootstrap",
   ]
 
   count         = "${var.va["nodes"]}"
@@ -390,7 +386,7 @@ resource "aws_instance" "icpva" {
     volume_type       = "gp2"
   }
 
-  iam_instance_profile = "${local.iam_ec2_instance_profile_id}"
+  iam_instance_profile = "${local.iam_ec2_node_instance_profile_id}"
 
   tags = "${merge(
     var.default_tags,
@@ -401,25 +397,27 @@ resource "aws_instance" "icpva" {
   user_data = <<EOF
 #cloud-config
 packages:
-  - unzip
-  - python
+- unzip
+- python
 rh_subscription:
   enable-repo: rhui-REGION-rhel-server-optional
 write_files:
-  - path: /tmp/bootstrap.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/bootstrap.sh"))}
+- path: /tmp/bootstrap-node.sh
+  permissions: '0755'
+  encoding: b64
+  content: ${base64encode(file("${path.module}/scripts/bootstrap-node.sh"))}
 runcmd:
-  - /tmp/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx ${local.image_package_uri != "" ? "-i ${local.image_package_uri}" : "" } -s ${var.icp_inception_image}
+- /tmp/bootstrap-node.sh -c ${aws_s3_bucket.icp_config_backup.id} -s "bootstrap.sh"
+- /tmp/icp_scripts/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx 
 users:
-  - default
-  - name: icpdeploy
-    groups: [ wheel ]
-    sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
-    shell: /bin/bash
-    ssh-authorized-keys:
-      - ${tls_private_key.installkey.public_key_openssh}
+- default
+- name: icpdeploy
+  groups: [ wheel ]
+  sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
+  shell: /bin/bash
+  ssh-authorized-keys:
+  - ${tls_private_key.installkey.public_key_openssh}
+fqdn: ${format("${var.instance_name}-va%02d", count.index + 1) }.${random_id.clusterid.hex}.${var.private_domain}
 manage_resolv_conf: true
 resolv_conf:
   nameservers: [ ${cidrhost(element(aws_subnet.icp_private_subnet.*.cidr_block, count.index), 2)}]
@@ -436,8 +434,7 @@ resource "aws_instance" "icpnodes" {
   # Make sure the nodes will have internet access before provisioning
   depends_on = [
     "aws_route_table_association.a",
-    "null_resource.icp_install_package",
-    "aws_s3_bucket_object.docker_install_package"
+    "aws_s3_bucket_object.bootstrap",
   ]
 
   key_name      = "${var.key_name}"
@@ -450,7 +447,7 @@ resource "aws_instance" "icpnodes" {
 
   availability_zone = "${format("%s%s", element(list(var.aws_region), count.index), element(var.azs, count.index))}"
 
-  iam_instance_profile = "${local.iam_ec2_instance_profile_id}"
+  iam_instance_profile = "${local.iam_ec2_node_instance_profile_id}"
 
   ebs_optimized = "${var.worker["ebs_optimized"]}"
   root_block_device {
@@ -473,25 +470,27 @@ resource "aws_instance" "icpnodes" {
   user_data = <<EOF
 #cloud-config
 packages:
-  - unzip
-  - python
+- unzip
+- python
 rh_subscription:
   enable-repo: rhui-REGION-rhel-server-optional
 write_files:
-  - path: /tmp/bootstrap.sh
-    permissions: '0755'
-    encoding: b64
-    content: ${base64encode(file("${path.module}/scripts/bootstrap.sh"))}
+- path: /tmp/bootstrap-node.sh
+  permissions: '0755'
+  encoding: b64
+  content: ${base64encode(file("${path.module}/scripts/bootstrap-node.sh"))}
 runcmd:
-  - /tmp/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx ${local.image_package_uri != "" ? "-i ${local.image_package_uri}" : "" } -s ${var.icp_inception_image}
+- /tmp/bootstrap-node.sh -c ${aws_s3_bucket.icp_config_backup.id} -s "bootstrap.sh"
+- /tmp/icp_scripts/bootstrap.sh ${local.docker_package_uri != "" ? "-p ${local.docker_package_uri}" : "" } -d /dev/xvdx 
 users:
-  - default
-  - name: icpdeploy
-    groups: [ wheel ]
-    sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
-    shell: /bin/bash
-    ssh-authorized-keys:
-      - ${tls_private_key.installkey.public_key_openssh}
+- default
+- name: icpdeploy
+  groups: [ wheel ]
+  sudo: [ "ALL=(ALL) NOPASSWD:ALL" ]
+  shell: /bin/bash
+  ssh-authorized-keys:
+  - ${tls_private_key.installkey.public_key_openssh}
+fqdn: ${format("${var.instance_name}-worker%02d", count.index + 1) }.${random_id.clusterid.hex}.${var.private_domain}
 manage_resolv_conf: true
 resolv_conf:
   nameservers: [ ${cidrhost(element(aws_subnet.icp_private_subnet.*.cidr_block, count.index), 2)}]
@@ -514,12 +513,8 @@ resource "aws_network_interface" "mastervip" {
     "${compact(
         list(
           aws_security_group.default.id,
-          aws_security_group.master-8001.id,
-          aws_security_group.master-8443.id,
-          aws_security_group.master-8500.id,
-          aws_security_group.master-9443.id,
-          var.proxy["nodes"] == 0 ? aws_security_group.proxy-80.id : "",
-          var.proxy["nodes"] == 0 ? aws_security_group.proxy-443.id : ""
+          aws_security_group.master.id,
+          var.proxy["nodes"] == 0 ? aws_security_group.proxy.id : ""
       ))}"
   ]
 
@@ -535,8 +530,7 @@ resource "aws_network_interface" "proxyvip" {
 
   security_groups = [
     "${aws_security_group.default.id}",
-    "${aws_security_group.proxy-80.id}",
-    "${aws_security_group.proxy-443.id}"
+    "${aws_security_group.proxy.id}"
   ]
 
   tags = "${merge(var.default_tags, map(

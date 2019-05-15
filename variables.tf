@@ -1,8 +1,5 @@
 ####### AWS Access and Region Details #############################
-variable "access_key" {  }
-variable "secret_key" {  }
 variable "aws_region" {
-  #default  = "eu-west-1"
   default  = "us-east-2"
   description = "One of us-east-2, us-east-1, us-west-1, us-west-2, ap-south-1, ap-northeast-2, ap-southeast-1, ap-southeast-2, ap-northeast-1, us-west-2, eu-central-1, eu-west-1, eu-west-2, sa-east-1"
 }
@@ -57,7 +54,8 @@ variable "pub_subnet_cidrs" {
   default     = ["10.10.20.0/24", "10.10.21.0/24", "10.10.22.0/24" ]
 }
 
-variable "ec2_iam_role_name" { default = "icp-ec2-iam" }
+variable "ec2_iam_master_role_name" { default = "icp-ec2-iam-master" }
+variable "ec2_iam_node_role_name" { default = "icp-ec2-iam-node" }
 variable "private_domain" { default = "icp-cluster.icp" }
 
 variable "ami" { default = "" }
@@ -78,9 +76,9 @@ variable "master" {
   type = "map"
   default = {
     nodes     = "3"
-    type      = "m4.xlarge"
-    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
-    disk      = "100" //GB
+    type      = "m4.2xlarge"
+    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    disk      = "300" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
   }
@@ -88,10 +86,10 @@ variable "master" {
 variable "proxy" {
   type = "map"
   default = {
-    nodes     = "1"
-    type      = "m4.large"
-    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
-    disk      = "100" //GB
+    nodes     = "3"
+    type      = "m4.xlarge"
+    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    disk      = "150" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
   }
@@ -100,10 +98,10 @@ variable "proxy" {
 variable "management" {
   type = "map"
   default = {
-    nodes     = "1"
-    type      = "m4.xlarge"
-    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
-    disk      = "100" //GB
+    nodes     = "3"
+    type      = "m4.2xlarge"
+    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    disk      = "300" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
   }
@@ -112,10 +110,10 @@ variable "management" {
 variable "worker" {
   type = "map"
   default = {
-    nodes     = "1"
-    type      = "m4.xlarge"
-    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
-    disk      = "100" //GB
+    nodes     = "3"
+    type      = "m4.2xlarge"
+    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    disk      = "150" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
   }
@@ -124,17 +122,19 @@ variable "worker" {
 variable "va" {
   type = "map"
   default = {
-    nodes     = "0"
-    type      = "m4.xlarge"
-    ami       = "ami-f53e0890" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
-    disk      = "100" //GB
+    nodes     = "3"
+    type      = "m4.2xlarge"
+    ami       = "" // Leave blank to let terraform search for Ubuntu 16.04 ami. NOT RECOMMENDED FOR PRODUCTION
+    disk      = "300" //GB
     docker_vol = "100" // GB
     ebs_optimized = true    // not all instance types support EBS optimized
   }
 }
 
 variable "instance_name" { default = "icp" }
-variable "icppassword" { default = "MySecretP4ssw0RD" }
+variable "icppassword" {
+   default = ""
+}
 
 variable "docker_package_location" {
   description = "When installing ICP EE on RedHat. Prefix location string with http: or nfs: to indicate protocol "
@@ -146,9 +146,33 @@ variable "image_location" {
   default     = ""
 }
 
+variable "registry_server" {
+  default   = ""
+}
+
+variable "registry_username" {
+  default   = ""
+}
+
+variable "registry_password" {
+  default   = ""
+}
+
+variable "patch_images" {
+  description = "Additional patch images loaded before install, stored in S3"
+  type        = "list"
+  default     = []
+}
+
+variable "patch_scripts" {
+  description = "Additional patch scripts run after install, stored in S3"
+  type        = "list"
+  default     = []
+}
+
 variable "icp_inception_image" {
   description = "icp-inception bootstrap image repository"
-  default     = "ibmcom/icp-inception:2.1.0.2-ee"
+  default     = "ibmcom/icp-inception-amd64:3.1.2-ee"
 }
 
 variable "icp_config_yaml" {
@@ -168,8 +192,13 @@ variable "postinstallbackup" {
   default     = "true"
 }
 
-variable "existing_ec2_iam_instance_profile_name" {
-  description = "Existing IAM instance profile name to apply to EC2 instances"
+variable "existing_ec2_iam_master_instance_profile_name" {
+  description = "Existing IAM instance profile name to apply to master EC2 instances"
+  default     = ""
+}
+
+variable "existing_ec2_iam_node_instance_profile_name" {
+  description = "Existing IAM instance profile name to apply to node EC2 instances"
   default     = ""
 }
 
@@ -208,6 +237,13 @@ variable "allowed_cidr_master_8500" {
   ]
 }
 
+variable "allowed_cidr_master_8600" {
+  type = "list"
+  default = [
+    "0.0.0.0/0"
+  ]
+}
+
 variable "allowed_cidr_proxy_80" {
   type = "list"
   default = [
@@ -227,4 +263,14 @@ variable "allowed_cidr_bastion_22" {
   default = [
     "0.0.0.0/0"
   ]
+}
+
+variable "use_aws_cloudprovider" {
+  default = "true"
+}
+
+variable "disabled_management_services" {
+  description = "List of management services to disable"
+  type        = "list"
+  default     = ["istio", "vulnerability-advisor", "storage-glusterfs", "storage-minio"]
 }
